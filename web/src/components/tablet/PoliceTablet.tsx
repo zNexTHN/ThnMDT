@@ -15,6 +15,7 @@ import PenalCodeSection from "./PenalCodeSection";
 import PlaceholderSection from "./PlaceholderSection";
 import { closeTablet } from "@/lib/fivem";
 import { toast } from "@/hooks/use-toast";
+import { usePlayerData, useStats } from "@/hooks/useFiveM";
 
 // Mock data
 const mockOccurrences = [
@@ -100,11 +101,14 @@ const PoliceTablet = () => {
   const [alertContent, setAlertContent] = useState(initialAlertContent);
   const [alertLastUpdate, setAlertLastUpdate] = useState(new Date().toLocaleString("pt-BR"));
 
-  // Stats
+  const { data: playerData, isLoading: isLoadingPlayer } = usePlayerData();
+  const { data: statsData } = useStats();
+
+  // Stats Reais (com fallback para 0 se não carregar)
   const stats = {
-    bulletins: mockOccurrences.length,
-    officers: 44,
-    onDuty: 12,
+    bulletins: statsData?.bulletins || 0,
+    officers: statsData?.officers || 0,
+    onDuty: statsData?.onDuty || 0,
   };
 
   const handleClose = () => {
@@ -140,6 +144,26 @@ const PoliceTablet = () => {
       description: item ? `Item ID: ${item.id}` : "Ação executada",
     });
   };
+
+  return (
+    <div className="relative w-full max-w-7xl h-[90vh] max-h-[900px] glass-card overflow-hidden flex flex-col animate-scale-in">
+      {/* Header com Dados Dinâmicos */}
+      <TabletHeader
+        userName={playerData?.name || "Carregando..."}
+        userId={playerData?.registration || "..."}   
+        rank={playerData?.rank || "Policial"}
+        isOnDuty={isOnDuty} // Nota: Idealmente isso também viria do backend/hook
+        serviceTime="--:--" // Você precisará implementar a lógica de tempo de serviço no backend
+        onClose={handleClose}
+        onToggleDuty={handleToggleDuty}
+      />
+
+      {/* Body */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* ... Sidebar e Main Content ... */}
+      </div>
+    </div>
+  );
 
   const renderSection = () => {
     switch (activeSection) {
@@ -234,7 +258,7 @@ const PoliceTablet = () => {
   };
 
   return (
-    <div className="relative w-full max-w-7xl h-[90vh] max-h-[900px] glass-card overflow-hidden flex flex-col animate-scale-in">
+    <div className="relative w-full max-w-7xl h-[90vh] max-h-[900px] glass-card flex flex-col animate-scale-in">
       {/* Header */}
       <TabletHeader
         userName="Bruno Thomas"
@@ -255,7 +279,7 @@ const PoliceTablet = () => {
         />
 
         {/* Main Content */}
-        <main className="flex-1 p-6 overflow-y-auto bg-background">
+        <main className="flex-1 p-6 overflow-y-auto bg-transparent">
           {renderSection()}
         </main>
       </div>

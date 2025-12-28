@@ -63,10 +63,19 @@ export const useIsFiveM = () => {
  */
 export const useTabletVisibility = () => {
   const [isVisible, setIsVisible] = useState(false);
+  const queryClient = useQueryClient(); // 2. Instancia o QueryClient
 
   useEffect(() => {
     // Listener para abrir tablet
-    const cleanupOpen = onNUIMessage('tablet:open', () => {
+    // 3. Adicionamos 'data: any' para receber o payload do Lua
+    const cleanupOpen = onNUIMessage('tablet:open', (data: any) => {
+      
+      // 4. Se o Lua enviou playerData, injetamos direto no cache!
+      if (data.playerData) {
+        console.log("Dados recebidos do Lua:", data.playerData); // Debug
+        queryClient.setQueryData(['playerData'], data.playerData);
+      }
+
       setIsVisible(true);
     });
 
@@ -89,7 +98,7 @@ export const useTabletVisibility = () => {
       cleanupClose();
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, []);
+  }, [queryClient]); // Adicione queryClient nas dependências
 
   const handleClose = useCallback(() => {
     setIsVisible(false);
@@ -98,7 +107,6 @@ export const useTabletVisibility = () => {
 
   return { isVisible, setIsVisible, handleClose };
 };
-
 /**
  * Hook para dados do jogador logado
  */

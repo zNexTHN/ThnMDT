@@ -37,6 +37,7 @@ function OpenTablet()
         isTabletOpen = true
         SetNuiFocus(true, true)
         
+        print(json.encode(playerData))
         SendNUIMessage({
             type = 'tablet:open',
             playerData = playerData
