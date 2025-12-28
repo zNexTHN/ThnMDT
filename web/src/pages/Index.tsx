@@ -1,15 +1,20 @@
 import { Helmet } from "react-helmet-async";
 import PoliceTablet from "@/components/tablet/PoliceTablet";
+import { useTabletVisibility } from "@/hooks/useFiveM"; // 1. Importa o hook
 
 const Index = () => {
+  const { isVisible } = useTabletVisibility();
+
+  if (!isVisible) return null;
+
   return (
     <>
       <Helmet>
         <title>Tablet Policial - VRPex</title>
-        <meta name="description" content="Sistema de gestão policial para VRPex. Gerencie ocorrências, cidadãos, veículos e recrutamento." />
       </Helmet>
       
-      <div className="min-h-screen flex items-center justify-center overflow-hidden">
+      {/* ALTERAÇÃO AQUI: Adicionado w-full h-full bg-transparent */}
+      <div className="w-full h-full min-h-screen flex items-center justify-center overflow-hidden bg-transparent">
         <PoliceTablet />
       </div>
     </>

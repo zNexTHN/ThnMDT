@@ -1,8 +1,12 @@
+/* Substitua TUDO que estiver no web/src/App.css por isso: */
 #root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  max-width: none !important;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  text-align: left !important;
+  background-color: transparent !important;
 }
 
 .logo {

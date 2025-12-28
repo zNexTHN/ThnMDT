@@ -6,7 +6,7 @@
 
 @layer base {
   :root {
-    --background: 222 47% 6%;
+    --background: 222 47% 6% / 0;
     --foreground: 210 40% 98%;
 
     --card: 222 47% 8%;
@@ -68,12 +68,13 @@
     @apply border-border;
   }
 
+  /* No final do web/src/index.css */
   html, body, #root {
-    @apply bg-transparent text-foreground antialiased;
-    font-family: 'Inter', sans-serif;
-    margin: 0;
-    padding: 0;
-    overflow: hidden;
+    background-color: transparent !important;
+    width: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
+    overflow: hidden !important;
   }
 
   ::-webkit-scrollbar {
@@ -340,4 +341,37 @@
   50% {
     box-shadow: var(--glow-primary);
   }
+}
+
+/* --- CORREÇÃO DE TELA CHEIA E TRANSPARÊNCIA (FIVEM) --- */
+
+/* Adicione no final do web/src/index.css */
+#root, body, html {
+  background-color: transparent !important;
+  background: transparent !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  overflow: hidden !important; /* Corta qualquer borda extra */
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Garante que o container do React também seja transparente */
+
+#root {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important; /* Remove limite de largura */
+  background-color: transparent !important;
+  display: flex !important; /* Garante que o conteúdo possa centralizar */
+  align-items: center;
+  justify-content: center;
+}
+
+
+/* Remove a cor de fundo padrão do Shadcn/Tailwind se ainda existir */
+:root {
+  --background: transparent !important;
 }

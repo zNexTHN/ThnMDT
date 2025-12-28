@@ -9,9 +9,11 @@ import VehiclesSection from "./VehiclesSection";
 import RecruitmentSection from "./RecruitmentSection";
 import PositionsSection from "./PositionsSection";
 import EmployeesSection from "./EmployeesSection";
+
 import OnDutySection from "./OnDutySection";
 import PenalCodeSection from "./PenalCodeSection";
 import PlaceholderSection from "./PlaceholderSection";
+import { closeTablet } from "@/lib/fivem";
 import { toast } from "@/hooks/use-toast";
 
 // Mock data
@@ -106,6 +108,7 @@ const PoliceTablet = () => {
   };
 
   const handleClose = () => {
+    closeTablet(); // <--- ADICIONE ISSO PARA DESTRAVAR A TELA E SUMIR O TABLET
     toast({
       title: "Tablet fechado",
       description: "O tablet policial foi fechado.",
