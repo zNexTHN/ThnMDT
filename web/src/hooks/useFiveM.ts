@@ -62,7 +62,7 @@ export const useIsFiveM = () => {
  * Hook para controlar visibilidade do tablet
  */
 export const useTabletVisibility = () => {
-  const [isVisible, setIsVisible] = useState(true);
+  const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
     // Listener para abrir tablet

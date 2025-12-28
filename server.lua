@@ -4,51 +4,192 @@ local Proxy = module("vrp", "lib/Proxy")
 vRP = Proxy.getInterface("vRP")
 vRPclient = Tunnel.getInterface("vRP")
 
+-- Definição da interface do nosso script
+src = {}
+Tunnel.bindInterface("ThnMDT", src)
+
 -- ============================================
--- HELPERS VRPEX
+-- PREPARAÇÃO SQL (vRPex Padrão)
+-- ============================================
+-- Certifique-se que suas tabelas SQL existem no banco de dados com esses nomes.
+
+vRP.prepare("ThnMDT/get_stats_bulletins", "SELECT COUNT(*) as qtd FROM police_occurrences")
+vRP.prepare("ThnMDT/get_stats_officers", "SELECT COUNT(*) as qtd FROM police_employees")
+vRP.prepare("ThnMDT/get_stats_onduty", "SELECT COUNT(*) as qtd FROM police_employees WHERE is_on_duty = 1")
+vRP.prepare("ThnMDT/get_stats_recruitment", "SELECT COUNT(*) as qtd FROM police_recruitment WHERE status = 'Pendente'")
+vRP.prepare("ThnMDT/get_stats_pending", "SELECT COUNT(*) as qtd FROM police_occurrences WHERE status = 'Aberto'")
+
+vRP.prepare("ThnMDT/update_duty", "UPDATE police_employees SET is_on_duty = @status, last_clock_in = @time WHERE visa_id = @visaId")
+vRP.prepare("ThnMDT/update_duty_out", "UPDATE police_employees SET is_on_duty = 0 WHERE visa_id = @visaId")
+vRP.prepare("ThnMDT/insert_clock_history", "INSERT INTO police_clock_history (visa_id, type, date) VALUES (@visaId, @type, @date)")
+vRP.prepare("ThnMDT/get_employee_duty", "SELECT is_on_duty, last_clock_in FROM police_employees WHERE visa_id = @visaId")
+
+vRP.prepare("ThnMDT/get_onduty_officers", "SELECT e.*, r.name as rank_name, r.color as rank_color FROM police_employees e LEFT JOIN police_ranks r ON e.rank_id = r.id WHERE e.is_on_duty = 1")
+
+vRP.prepare("ThnMDT/get_all_positions", "SELECT r.*, (SELECT COUNT(*) FROM police_employees WHERE rank_id = r.id) as officer_count FROM police_ranks r ORDER BY r.id ASC")
+vRP.prepare("ThnMDT/update_position_perms", "UPDATE police_ranks SET permissions = @permissions WHERE id = @id")
+vRP.prepare("ThnMDT/update_position_salary", "UPDATE police_ranks SET salary = @salary WHERE id = @id")
+vRP.prepare("ThnMDT/insert_position", "INSERT INTO police_ranks (name, salary, color, permissions) VALUES (@name, @salary, @color, @permissions)")
+vRP.prepare("ThnMDT/delete_position", "DELETE FROM police_ranks WHERE id = @id")
+
+vRP.prepare("ThnMDT/get_all_employees", "SELECT e.*, r.name as rank_name, r.color as rank_color FROM police_employees e LEFT JOIN police_ranks r ON e.rank_id = r.id ORDER BY e.rank_id ASC")
+vRP.prepare("ThnMDT/get_employee_details", "SELECT e.*, r.name as rank_name, r.color as rank_color FROM police_employees e LEFT JOIN police_ranks r ON e.rank_id = r.id WHERE e.visa_id = @visaId")
+vRP.prepare("ThnMDT/get_employee_history", "SELECT type, date FROM police_clock_history WHERE visa_id = @visaId ORDER BY date DESC LIMIT 50")
+vRP.prepare("ThnMDT/update_employee_rank", "UPDATE police_employees SET rank_id = @rankId WHERE visa_id = @visaId")
+vRP.prepare("ThnMDT/get_rank_name", "SELECT name FROM police_ranks WHERE id = @id")
+vRP.prepare("ThnMDT/update_recruiter", "UPDATE police_employees SET is_recruiter = @value WHERE visa_id = @visaId")
+vRP.prepare("ThnMDT/get_is_recruiter", "SELECT is_recruiter FROM police_employees WHERE visa_id = @visaId")
+vRP.prepare("ThnMDT/delete_employee", "DELETE FROM police_employees WHERE visa_id = @visaId")
+vRP.prepare("ThnMDT/insert_log", "INSERT INTO police_logs (action, admin_visa_id, target_visa_id, reason, date) VALUES (@action, @admin, @target, @reason, @date)")
+vRP.prepare("ThnMDT/insert_warning", "INSERT INTO police_warnings (visa_id, reason, date, issued_by) VALUES (@visaId, @reason, @date, @issuedBy)")
+vRP.prepare("ThnMDT/get_warnings", "SELECT id, reason, date, issued_by as issuedBy FROM police_warnings WHERE visa_id = @visaId ORDER BY date DESC")
+
+vRP.prepare("ThnMDT/get_all_occurrences", "SELECT * FROM police_occurrences ORDER BY created_at DESC")
+vRP.prepare("ThnMDT/get_occurrence", "SELECT * FROM police_occurrences WHERE id = @id")
+vRP.prepare("ThnMDT/get_occurrence_officers", "SELECT e.visa_id, e.name FROM police_occurrence_officers oo JOIN police_employees e ON oo.visa_id = e.visa_id WHERE oo.occurrence_id = @id")
+vRP.prepare("ThnMDT/insert_occurrence", "INSERT INTO police_occurrences (title, date, requester, opened_by, opened_at, description, status, created_at) VALUES (@title, @date, @requester, @openedBy, @openedAt, @description, @status, NOW())")
+vRP.prepare("ThnMDT/inc_bulletins", "UPDATE police_employees SET bulletins_created = bulletins_created + 1 WHERE visa_id = @visaId")
+vRP.prepare("ThnMDT/update_occurrence_status", "UPDATE police_occurrences SET status = 'Fechado', resolution = @resolution, closed_at = NOW() WHERE id = @id")
+vRP.prepare("ThnMDT/delete_occurrence", "DELETE FROM police_occurrences WHERE id = @id")
+vRP.prepare("ThnMDT/add_officer_occurrence", "INSERT IGNORE INTO police_occurrence_officers (occurrence_id, visa_id) VALUES (@occurrenceId, @visaId)")
+
+vRP.prepare("ThnMDT/get_all_identities", "SELECT user_id as id, user_id as visa_id, name, firstname, phone, registration FROM vrp_user_identities LIMIT 100")
+vRP.prepare("ThnMDT/search_identities", "SELECT user_id as id, user_id as visa_id, name, firstname, phone, registration FROM vrp_user_identities WHERE name LIKE @query OR firstname LIKE @query OR user_id LIKE @query OR registration LIKE @query LIMIT 50")
+vRP.prepare("ThnMDT/get_identity", "SELECT user_id as id, user_id as visaid, name, firstname, phone, registration, age FROM vrp_user_identities WHERE user_id = @visaId")
+vRP.prepare("ThnMDT/get_criminal_records", "SELECT * FROM police_criminal_records WHERE visa_id = @visaId ORDER BY date DESC")
+vRP.prepare("ThnMDT/insert_criminal_record", "INSERT INTO police_criminal_records (visa_id, article, date, officer, fine, jail_time) VALUES (@visaId, @article, @date, @officer, @fine, @jailTime)")
+
+vRP.prepare("ThnMDT/get_all_vehicles", "SELECT v.*, i.name, i.firstname, i.user_id as visaid FROM vrp_user_vehicles v LEFT JOIN vrp_user_identities i ON v.user_id = i.user_id LIMIT 100")
+vRP.prepare("ThnMDT/search_vehicles", "SELECT v.*, i.name, i.firstname, i.user_id as visaid FROM vrp_user_vehicles v LEFT JOIN vrp_user_identities i ON v.user_id = i.user_id WHERE v.vehicle_plate LIKE @plate")
+vRP.prepare("ThnMDT/get_vehicle", "SELECT v.*, i.name, i.firstname, i.user_id as visaid FROM vrp_user_vehicles v LEFT JOIN vrp_user_identities i ON v.user_id = i.user_id WHERE v.vehicle_plate = @plate")
+vRP.prepare("ThnMDT/update_vehicle_irregular", "UPDATE vrp_user_vehicles SET irregular = @irregular, irregular_reason = @reason WHERE vehicle_plate = @plate")
+vRP.prepare("ThnMDT/update_vehicle_seized", "UPDATE vrp_user_vehicles SET seized = @seized, seized_reason = @reason, seized_date = @date WHERE vehicle_plate = @plate")
+
+vRP.prepare("ThnMDT/get_recruitments", "SELECT * FROM police_recruitment ORDER BY created_at DESC")
+vRP.prepare("ThnMDT/insert_recruitment", "INSERT INTO police_recruitment (visa_id, name, grade, status, updated_by, updated_at, notes, created_at) VALUES (@visaId, @name, 0, 'Pendente', @updatedBy, @updatedAt, @notes, NOW())")
+vRP.prepare("ThnMDT/update_recruitment_status", "UPDATE police_recruitment SET status = @status, updated_by = @updatedBy, updated_at = @updatedAt WHERE id = @id")
+vRP.prepare("ThnMDT/insert_employee_from_recruitment", "INSERT INTO police_employees (visa_id, name, rank_id, is_on_duty, bulletins_created, is_recruiter) VALUES (@visaId, @name, @rankId, 0, 0, 0)")
+vRP.prepare("ThnMDT/update_recruitment_reject", "UPDATE police_recruitment SET status = 'Reprovado', updated_by = @updatedBy, updated_at = @updatedAt, rejection_reason = @reason WHERE id = @id")
+vRP.prepare("ThnMDT/delete_recruitment", "DELETE FROM police_recruitment WHERE id = @id")
+
+vRP.prepare("ThnMDT/get_penalcode", "SELECT * FROM police_penal_code ORDER BY category, article")
+vRP.prepare("ThnMDT/get_penalcode_article", "SELECT * FROM police_penal_code WHERE article = @article")
+vRP.prepare("ThnMDT/insert_penalcode", "INSERT INTO police_penal_code (article, title, description, penalty, fine, jail_time, category) VALUES (@article, @title, @description, @penalty, @fine, @jailTime, @category)")
+vRP.prepare("ThnMDT/delete_penalcode", "DELETE FROM police_penal_code WHERE id = @id")
+
+vRP.prepare("ThnMDT/get_alerts", "SELECT * FROM police_alerts ORDER BY id DESC LIMIT 1")
+vRP.prepare("ThnMDT/count_alerts", "SELECT COUNT(*) as qtd FROM police_alerts")
+vRP.prepare("ThnMDT/update_alerts", "UPDATE police_alerts SET content = @content, last_update = @lastUpdate, updated_by = @updatedBy ORDER BY id DESC LIMIT 1")
+vRP.prepare("ThnMDT/insert_alerts", "INSERT INTO police_alerts (content, last_update, updated_by) VALUES (@content, @lastUpdate, @updatedBy)")
+
+vRP.prepare("ThnMDT/get_missions", "SELECT * FROM police_missions ORDER BY created_at DESC")
+vRP.prepare("ThnMDT/get_mission_officers", "SELECT visa_id FROM police_mission_officers WHERE mission_id = @id")
+vRP.prepare("ThnMDT/insert_mission", "INSERT INTO police_missions (title, description, status, created_by, created_at, priority) VALUES (@title, @description, @status, @createdBy, NOW(), @priority)")
+vRP.prepare("ThnMDT/insert_mission_officer", "INSERT INTO police_mission_officers (mission_id, visa_id) VALUES (@missionId, @visaId)")
+vRP.prepare("ThnMDT/update_mission_status", "UPDATE police_missions SET status = @status WHERE id = @id")
+vRP.prepare("ThnMDT/delete_mission_officer", "DELETE FROM police_mission_officers WHERE mission_id = @missionId AND visa_id = @visaId")
+vRP.prepare("ThnMDT/delete_mission_officers_all", "DELETE FROM police_mission_officers WHERE mission_id = @id")
+vRP.prepare("ThnMDT/delete_mission", "DELETE FROM police_missions WHERE id = @id")
+
+vRP.prepare("ThnMDT/get_logs", "SELECT * FROM police_logs ORDER BY date DESC LIMIT 100")
+
+
+-- ============================================
+-- HELPERS LOCAIS
 -- ============================================
 
-function GetVisaIdFromSource(source)
-    local user_id = vRP.getUserId(source)
-    return user_id
+local function GetPlayerGroup(user_id)
+    -- Lógica simples de verificação. Ajuste conforme seus grupos do vRPex
+    if vRP.hasGroup(user_id, "policia.coronel") then return "Coronel" end
+    if vRP.hasGroup(user_id, "policia.tenente") then return "Tenente" end
+    -- Adicione seus grupos aqui ou use a lógica do Config.Ranks se os nomes baterem
+    for _, rank in ipairs(Config.Ranks) do
+        if vRP.hasGroup(user_id, rank.name) then
+            return rank.name
+        end
+    end
+    return nil
 end
 
-function GetPlayerIdentity(visaId)
-    local identity = vRP.getIdentity(visaId)
-    return identity
-end
-
-function HasPolicePermission(source, permission)
-    local user_id = vRP.getUserId(source)
-    local groups = vRP.getUserGroups(user_id)
-    
-    for group, _ in pairs(groups) do
+local function GetPlayerRank(user_id)
+    local groupName = GetPlayerGroup(user_id)
+    if groupName then
         for _, rank in ipairs(Config.Ranks) do
-            if group == rank.name then
-                if rank.permissions[1] == 'all' then
-                    return true
-                end
-                for _, perm in ipairs(rank.permissions) do
-                    if perm == permission then
-                        return true
-                    end
-                end
+            if rank.name == groupName then
+                return rank
             end
         end
+    end
+    return Config.Ranks[#Config.Ranks] -- Default Soldado
+end
+
+local function HasPolicePermission(user_id, permission)
+    local rank = GetPlayerRank(user_id)
+    if not rank then return false end
+    
+    if rank.permissions[1] == 'all' then return true end
+    
+    for _, perm in ipairs(rank.permissions) do
+        if perm == permission then return true end
     end
     return false
 end
 
 -- ============================================
--- ESTATÍSTICAS
+-- FUNÇÕES EXPORTADAS (TUNNEL)
 -- ============================================
 
-vRP.registerRequest('tablet:getStats', function(source, data)
-    local bulletins = MySQL.Sync.fetchScalar('SELECT COUNT(*) FROM police_occurrences')
-    local officers = MySQL.Sync.fetchScalar('SELECT COUNT(*) FROM police_employees')
-    local onDuty = MySQL.Sync.fetchScalar('SELECT COUNT(*) FROM police_employees WHERE is_on_duty = 1')
-    local activeRecruitments = MySQL.Sync.fetchScalar("SELECT COUNT(*) FROM police_recruitment WHERE status = 'Pendente'")
-    local pendingOccurrences = MySQL.Sync.fetchScalar("SELECT COUNT(*) FROM police_occurrences WHERE status = 'Aberto'")
+function src.openTabletRequest()
+    local source = source
+    local user_id = vRP.getUserId(source)
+    if not user_id then return false, {} end
+
+    -- if not GetPlayerGroup(user_id) then
+    --     return false, {}
+    -- end
+
+    local identity = vRP.getUserIdentity(user_id)
+    local rank = GetPlayerRank(user_id)
+    local isOnDuty = vRP.hasGroup(user_id, "EmServico") -- Exemplo de verificação de duty
+
+    return true, {
+        id = user_id,
+        visaId = tostring(user_id),
+        name = identity.name .. ' ' .. identity.firstname,
+        rank = rank.name,
+        rankId = rank.id,
+        rankColor = Config.RankColors[rank.name] or '#FFFFFF',
+        permissions = rank.permissions,
+        isOnDuty = isOnDuty
+    }
+end
+
+function src.getPlayerData()
+    local source = source
+    local user_id = vRP.getUserId(source)
+    if not user_id then return {} end
+
+    local identity = vRP.getUserIdentity(user_id)
+    local rank = GetPlayerRank(user_id)
+    
+    return {
+        id = user_id,
+        visaId = tostring(user_id),
+        name = identity.name .. ' ' .. identity.firstname,
+        rank = rank.name,
+        rankId = rank.id,
+        rankColor = Config.RankColors[rank.name] or '#FFFFFF',
+        permissions = rank.permissions,
+        isOnDuty = vRP.hasGroup(user_id, "EmServico")
+    }
+end
+
+function src.getStats()
+    local bulletins = vRP.query("ThnMDT/get_stats_bulletins", {})[1].qtd
+    local officers = vRP.query("ThnMDT/get_stats_officers", {})[1].qtd
+    local onDuty = vRP.query("ThnMDT/get_stats_onduty", {})[1].qtd
+    local activeRecruitments = vRP.query("ThnMDT/get_stats_recruitment", {})[1].qtd
+    local pendingOccurrences = vRP.query("ThnMDT/get_stats_pending", {})[1].qtd
     
     return {
         bulletins = bulletins or 0,
@@ -57,78 +198,64 @@ vRP.registerRequest('tablet:getStats', function(source, data)
         activeRecruitments = activeRecruitments or 0,
         pendingOccurrences = pendingOccurrences or 0
     }
-end)
+end
+
+function src.checkPermission(data)
+    local source = source
+    local user_id = vRP.getUserId(source)
+    return HasPolicePermission(user_id, data.permission)
+end
 
 -- ============================================
--- PONTO/SERVIÇO (VRPex)
+-- PONTO/SERVIÇO
 -- ============================================
 
-vRP.registerRequest('duty:clockIn', function(source, data)
-    local visaId = GetVisaIdFromSource(source)
+function src.clockIn()
+    local source = source
+    local user_id = vRP.getUserId(source)
     local time = os.date('%d/%m/%Y %H:%M')
     
-    local rowsChanged = MySQL.Sync.execute('UPDATE police_employees SET is_on_duty = 1, last_clock_in = @time WHERE visa_id = @visaId', {
-        ['@visaId'] = visaId,
-        ['@time'] = time
-    })
+    vRP.execute("ThnMDT/update_duty", { status = 1, time = time, visaId = user_id })
+    vRP.execute("ThnMDT/insert_clock_history", { visaId = user_id, type = 'in', date = time })
     
-    if rowsChanged > 0 then
-        MySQL.Async.execute('INSERT INTO police_clock_history (visa_id, type, date) VALUES (@visaId, @type, @date)', {
-            ['@visaId'] = visaId,
-            ['@type'] = 'in',
-            ['@date'] = time
-        })
-    end
+    -- Aqui você pode adicionar o grupo de serviço do vRP se usar
+    -- vRP.addUserGroup(user_id, "Policia")
     
-    return { success = rowsChanged > 0, time = time }
-end)
+    return { success = true, time = time }
+end
 
-vRP.registerRequest('duty:clockOut', function(source, data)
-    local visaId = GetVisaIdFromSource(source)
+function src.clockOut()
+    local source = source
+    local user_id = vRP.getUserId(source)
     local time = os.date('%d/%m/%Y %H:%M')
     
-    local rowsChanged = MySQL.Sync.execute('UPDATE police_employees SET is_on_duty = 0 WHERE visa_id = @visaId', {
-        ['@visaId'] = visaId
-    })
+    vRP.execute("ThnMDT/update_duty_out", { visaId = user_id })
+    vRP.execute("ThnMDT/insert_clock_history", { visaId = user_id, type = 'out', date = time })
     
-    if rowsChanged > 0 then
-        MySQL.Async.execute('INSERT INTO police_clock_history (visa_id, type, date) VALUES (@visaId, @type, @date)', {
-            ['@visaId'] = visaId,
-            ['@type'] = 'out',
-            ['@date'] = time
-        })
-    end
+    -- vRP.removeUserGroup(user_id, "Policia")
     
-    return { success = rowsChanged > 0, time = time }
-end)
+    return { success = true, time = time }
+end
 
-vRP.registerRequest('duty:getStatus', function(source, data)
-    local visaId = GetVisaIdFromSource(source)
+function src.getDutyStatus()
+    local source = source
+    local user_id = vRP.getUserId(source)
     
-    local result = MySQL.Sync.fetchAll('SELECT is_on_duty, last_clock_in FROM police_employees WHERE visa_id = @visaId', {
-        ['@visaId'] = visaId
-    })
-    
-    if result[1] then
+    local rows = vRP.query("ThnMDT/get_employee_duty", { visaId = user_id })
+    if #rows > 0 then
         return {
-            isOnDuty = result[1].is_on_duty == 1,
-            clockInTime = result[1].last_clock_in
+            isOnDuty = rows[1].is_on_duty == 1,
+            clockInTime = rows[1].last_clock_in
         }
     end
-    
     return { isOnDuty = false }
-end)
+end
 
-vRP.registerRequest('duty:getOnDutyOfficers', function(source, data)
-    local result = MySQL.Sync.fetchAll([[
-        SELECT e.*, r.name as rank_name, r.color as rank_color 
-        FROM police_employees e 
-        LEFT JOIN police_ranks r ON e.rank_id = r.id 
-        WHERE e.is_on_duty = 1
-    ]], {})
-    
+function src.getOnDutyOfficers()
+    local rows = vRP.query("ThnMDT/get_onduty_officers", {})
     local officers = {}
-    for _, row in ipairs(result) do
+    
+    for _, row in ipairs(rows) do
         table.insert(officers, {
             id = row.id,
             visaId = tostring(row.visa_id),
@@ -138,37 +265,31 @@ vRP.registerRequest('duty:getOnDutyOfficers', function(source, data)
             clockInTime = row.last_clock_in
         })
     end
-    
     return officers
-end)
+end
 
-vRP.registerRequest('duty:force', function(source, data)
-    if not HasPolicePermission(source, 'employees') then
-        return { success = false }
-    end
+function src.forceDuty(data)
+    local source = source
+    local user_id = vRP.getUserId(source)
+    if not HasPolicePermission(user_id, 'employees') then return { success = false } end
     
-    local rowsChanged = MySQL.Sync.execute('UPDATE police_employees SET is_on_duty = @status WHERE visa_id = @visaId', {
-        ['@visaId'] = data.visaId,
-        ['@status'] = data.status and 1 or 0
+    vRP.execute("ThnMDT/update_duty", { 
+        status = data.status and 1 or 0, 
+        visaId = data.visaId,
+        time = os.date('%d/%m/%Y %H:%M') -- Atualiza hora se forçar entrada
     })
     
-    return { success = rowsChanged > 0 }
-end)
+    return { success = true }
+end
 
 -- ============================================
--- CARGOS/PATENTES (VRPex)
+-- CARGOS
 -- ============================================
 
-vRP.registerRequest('positions:getAll', function(source, data)
-    local result = MySQL.Sync.fetchAll([[
-        SELECT r.*, 
-            (SELECT COUNT(*) FROM police_employees WHERE rank_id = r.id) as officer_count
-        FROM police_ranks r 
-        ORDER BY r.id ASC
-    ]], {})
-    
+function src.getAllPositions()
+    local rows = vRP.query("ThnMDT/get_all_positions", {})
     local positions = {}
-    for _, row in ipairs(result) do
+    for _, row in ipairs(rows) do
         table.insert(positions, {
             id = row.id,
             name = row.name,
@@ -178,81 +299,52 @@ vRP.registerRequest('positions:getAll', function(source, data)
             permissions = json.decode(row.permissions) or {}
         })
     end
-    
     return positions
-end)
+end
 
-vRP.registerRequest('positions:updatePermissions', function(source, data)
-    if not HasPolicePermission(source, 'positions') then
-        return { success = false }
-    end
+function src.createPosition(data)
+    local source = source
+    local user_id = vRP.getUserId(source)
+    if not HasPolicePermission(user_id, 'positions') then return { success = false } end
     
-    local rowsChanged = MySQL.Sync.execute('UPDATE police_ranks SET permissions = @permissions WHERE id = @id', {
-        ['@id'] = data.positionId,
-        ['@permissions'] = json.encode(data.permissions)
+    vRP.execute("ThnMDT/insert_position", {
+        name = data.name,
+        salary = tonumber(string.gsub(data.salary, '[^0-9]', '')) or 0,
+        color = data.color,
+        permissions = json.encode(data.permissions)
     })
-    
-    return { success = rowsChanged > 0 }
-end)
+    return { success = true }
+end
 
-vRP.registerRequest('positions:updateSalary', function(source, data)
-    if not HasPolicePermission(source, 'positions') then
-        return { success = false }
-    end
+function src.updatePositionPermissions(data)
+    local source = source
+    local user_id = vRP.getUserId(source)
+    if not HasPolicePermission(user_id, 'positions') then return { success = false } end
     
-    local rowsChanged = MySQL.Sync.execute('UPDATE police_ranks SET salary = @salary WHERE id = @id', {
-        ['@id'] = data.positionId,
-        ['@salary'] = data.salary
+    vRP.execute("ThnMDT/update_position_perms", {
+        id = data.positionId,
+        permissions = json.encode(data.permissions)
     })
-    
-    return { success = rowsChanged > 0 }
-end)
+    return { success = true }
+end
 
-vRP.registerRequest('positions:create', function(source, data)
-    if not HasPolicePermission(source, 'positions') then
-        return { success = false }
-    end
+function src.deletePosition(data)
+    local source = source
+    local user_id = vRP.getUserId(source)
+    if not HasPolicePermission(user_id, 'positions') then return { success = false } end
     
-    MySQL.Sync.execute([[
-        INSERT INTO police_ranks (name, salary, color, permissions) 
-        VALUES (@name, @salary, @color, @permissions)
-    ]], {
-        ['@name'] = data.name,
-        ['@salary'] = tonumber(string.gsub(data.salary, '[^0-9]', '')) or 0,
-        ['@color'] = data.color,
-        ['@permissions'] = json.encode(data.permissions)
-    })
-    
-    local insertId = MySQL.Sync.fetchScalar('SELECT LAST_INSERT_ID()')
-    return { success = true, id = insertId }
-end)
-
-vRP.registerRequest('positions:delete', function(source, data)
-    if not HasPolicePermission(source, 'positions') then
-        return { success = false }
-    end
-    
-    local rowsChanged = MySQL.Sync.execute('DELETE FROM police_ranks WHERE id = @id', {
-        ['@id'] = data.positionId
-    })
-    
-    return { success = rowsChanged > 0 }
-end)
+    vRP.execute("ThnMDT/delete_position", { id = data.positionId })
+    return { success = true }
+end
 
 -- ============================================
--- FUNCIONÁRIOS (VRPex)
+-- FUNCIONÁRIOS
 -- ============================================
 
-vRP.registerRequest('employees:getAll', function(source, data)
-    local result = MySQL.Sync.fetchAll([[
-        SELECT e.*, r.name as rank_name, r.color as rank_color 
-        FROM police_employees e 
-        LEFT JOIN police_ranks r ON e.rank_id = r.id 
-        ORDER BY e.rank_id ASC
-    ]], {})
-    
+function src.getAllEmployees()
+    local rows = vRP.query("ThnMDT/get_all_employees", {})
     local employees = {}
-    for _, row in ipairs(result) do
+    for _, row in ipairs(rows) do
         table.insert(employees, {
             id = row.id,
             visaId = tostring(row.visa_id),
@@ -266,29 +358,14 @@ vRP.registerRequest('employees:getAll', function(source, data)
             isRecruiter = row.is_recruiter == 1
         })
     end
-    
     return employees
-end)
+end
 
-vRP.registerRequest('employees:getDetails', function(source, data)
-    local result = MySQL.Sync.fetchAll([[
-        SELECT e.*, r.name as rank_name, r.color as rank_color 
-        FROM police_employees e 
-        LEFT JOIN police_ranks r ON e.rank_id = r.id 
-        WHERE e.visa_id = @visaId
-    ]], {
-        ['@visaId'] = data.visaId
-    })
-    
-    if result[1] then
-        local row = result[1]
-        local clockHistory = MySQL.Sync.fetchAll([[
-            SELECT type, date FROM police_clock_history 
-            WHERE visa_id = @visaId 
-            ORDER BY date DESC LIMIT 50
-        ]], {
-            ['@visaId'] = data.visaId
-        })
+function src.getEmployeeDetails(data)
+    local rows = vRP.query("ThnMDT/get_employee_details", { visaId = data.visaId })
+    if #rows > 0 then
+        local row = rows[1]
+        local history = vRP.query("ThnMDT/get_employee_history", { visaId = data.visaId })
         
         return {
             id = row.id,
@@ -301,1183 +378,225 @@ vRP.registerRequest('employees:getDetails', function(source, data)
             isOnDuty = row.is_on_duty == 1,
             bulletinsCreated = row.bulletins_created or 0,
             isRecruiter = row.is_recruiter == 1,
-            clockHistory = clockHistory
+            clockHistory = history
         }
     end
-    
     return nil
-end)
+end
 
-vRP.registerRequest('employees:updateRank', function(source, data)
-    if not HasPolicePermission(source, 'employees') then
-        return { success = false }
-    end
+function src.updateEmployeeRank(data)
+    local source = source
+    local user_id = vRP.getUserId(source)
+    if not HasPolicePermission(user_id, 'employees') then return { success = false } end
     
-    local rowsChanged = MySQL.Sync.execute('UPDATE police_employees SET rank_id = @rankId WHERE visa_id = @visaId', {
-        ['@visaId'] = data.visaId,
-        ['@rankId'] = data.newRankId
-    })
+    vRP.execute("ThnMDT/update_employee_rank", { visaId = data.visaId, rankId = data.newRankId })
     
-    -- Atualiza grupo no vRP
-    if rowsChanged > 0 then
-        local rank = MySQL.Sync.fetchAll('SELECT name FROM police_ranks WHERE id = @id', {
-            ['@id'] = data.newRankId
-        })
-        
-        if rank[1] then
-            -- Remove grupos antigos de polícia
-            for _, r in ipairs(Config.Ranks) do
-                vRP.removeUserGroup(tonumber(data.visaId), r.name)
+    -- Atualiza grupo vRP
+    local rankNameRows = vRP.query("ThnMDT/get_rank_name", { id = data.newRankId })
+    if #rankNameRows > 0 then
+        local target_id = tonumber(data.visaId)
+        -- Remover grupos antigos (logica customizada necessária aqui dependendo do seu sistema de grupos)
+        for _, r in ipairs(Config.Ranks) do
+            if vRP.hasGroup(target_id, r.name) then
+                vRP.removeUserGroup(target_id, r.name)
             end
-            -- Adiciona novo grupo
-            vRP.addUserGroup(tonumber(data.visaId), rank[1].name)
         end
+        vRP.addUserGroup(target_id, rankNameRows[1].name)
     end
     
-    return { success = rowsChanged > 0 }
-end)
+    return { success = true }
+end
 
-vRP.registerRequest('employees:toggleRecruiter', function(source, data)
-    if not HasPolicePermission(source, 'employees') then
-        return { success = false }
-    end
+function src.dismissEmployee(data)
+    local source = source
+    local user_id = vRP.getUserId(source)
+    if not HasPolicePermission(user_id, 'employees') then return { success = false } end
     
-    local currentValue = MySQL.Sync.fetchScalar('SELECT is_recruiter FROM police_employees WHERE visa_id = @visaId', {
-        ['@visaId'] = data.visaId
-    })
+    vRP.execute("ThnMDT/delete_employee", { visaId = data.visaId })
     
-    local newValue = currentValue == 1 and 0 or 1
-    
-    local rowsChanged = MySQL.Sync.execute('UPDATE police_employees SET is_recruiter = @value WHERE visa_id = @visaId', {
-        ['@visaId'] = data.visaId,
-        ['@value'] = newValue
-    })
-    
-    return { success = rowsChanged > 0, isRecruiter = newValue == 1 }
-end)
-
-vRP.registerRequest('employees:dismiss', function(source, data)
-    if not HasPolicePermission(source, 'employees') then
-        return { success = false }
-    end
-    
-    -- Remove do vRP
+    -- Remover grupos
+    local target_id = tonumber(data.visaId)
     for _, r in ipairs(Config.Ranks) do
-        vRP.removeUserGroup(tonumber(data.visaId), r.name)
+        vRP.removeUserGroup(target_id, r.name)
     end
-    
-    local rowsChanged = MySQL.Sync.execute('DELETE FROM police_employees WHERE visa_id = @visaId', {
-        ['@visaId'] = data.visaId
-    })
     
     -- Log
-    if rowsChanged > 0 then
-        local adminVisaId = GetVisaIdFromSource(source)
-        MySQL.Async.execute([[
-            INSERT INTO police_logs (action, admin_visa_id, target_visa_id, reason, date) 
-            VALUES (@action, @admin, @target, @reason, @date)
-        ]], {
-            ['@action'] = 'DISMISS',
-            ['@admin'] = adminVisaId,
-            ['@target'] = data.visaId,
-            ['@reason'] = data.reason or 'Não especificado',
-            ['@date'] = os.date('%Y-%m-%d %H:%M:%S')
-        })
-    end
-    
-    return { success = rowsChanged > 0 }
-end)
-
-vRP.registerRequest('employees:getClockHistory', function(source, data)
-    local result = MySQL.Sync.fetchAll([[
-        SELECT type, date FROM police_clock_history 
-        WHERE visa_id = @visaId 
-        ORDER BY date DESC LIMIT 50
-    ]], {
-        ['@visaId'] = data.visaId
-    })
-    
-    return result
-end)
-
-vRP.registerRequest('employees:addWarning', function(source, data)
-    if not HasPolicePermission(source, 'employees') then
-        return { success = false }
-    end
-    
-    local adminVisaId = GetVisaIdFromSource(source)
-    local adminIdentity = GetPlayerIdentity(adminVisaId)
-    
-    MySQL.Sync.execute([[
-        INSERT INTO police_warnings (visa_id, reason, date, issued_by) 
-        VALUES (@visaId, @reason, @date, @issuedBy)
-    ]], {
-        ['@visaId'] = data.visaId,
-        ['@reason'] = data.reason,
-        ['@date'] = os.date('%Y-%m-%d %H:%M:%S'),
-        ['@issuedBy'] = adminIdentity and (adminIdentity.name .. ' ' .. adminIdentity.firstname) or 'Sistema'
+    vRP.execute("ThnMDT/insert_log", {
+        action = 'DISMISS',
+        admin = user_id,
+        target = data.visaId,
+        reason = data.reason or 'Não especificado',
+        date = os.date('%Y-%m-%d %H:%M:%S')
     })
     
     return { success = true }
-end)
-
-vRP.registerRequest('employees:getWarnings', function(source, data)
-    local result = MySQL.Sync.fetchAll([[
-        SELECT id, reason, date, issued_by as issuedBy 
-        FROM police_warnings 
-        WHERE visa_id = @visaId 
-        ORDER BY date DESC
-    ]], {
-        ['@visaId'] = data.visaId
-    })
-    
-    return result
-end)
+end
 
 -- ============================================
--- OCORRÊNCIAS (VRPex)
+-- OCORRÊNCIAS
 -- ============================================
 
-vRP.registerRequest('occurrences:getAll', function(source, data)
-    local result = MySQL.Sync.fetchAll('SELECT * FROM police_occurrences ORDER BY created_at DESC', {})
-    
-    local occurrences = {}
-    for _, row in ipairs(result) do
-        table.insert(occurrences, {
-            id = row.id,
-            title = row.title,
-            date = row.date,
-            requester = row.requester,
-            openedBy = row.opened_by,
-            openedAt = row.opened_at,
-            description = row.description,
-            status = row.status
-        })
-    end
-    
-    return occurrences
-end)
+function src.getAllOccurrences()
+    local rows = vRP.query("ThnMDT/get_all_occurrences", {})
+    return rows -- A estrutura do banco já bate com o esperado pelo JS, mas pode precisar formatar a data
+end
 
-vRP.registerRequest('occurrences:getDetails', function(source, data)
-    local result = MySQL.Sync.fetchAll('SELECT * FROM police_occurrences WHERE id = @id', {
-        ['@id'] = data.occurrenceId
+function src.createOccurrence(data)
+    local source = source
+    local user_id = vRP.getUserId(source)
+    if not HasPolicePermission(user_id, 'occurrences') then return { success = false } end
+    
+    local identity = vRP.getUserIdentity(user_id)
+    local playerName = identity.name .. ' ' .. identity.firstname
+    
+    vRP.execute("ThnMDT/insert_occurrence", {
+        title = data.title,
+        date = os.date('%Y-%m-%d'),
+        requester = data.requester,
+        openedBy = playerName,
+        openedAt = os.date('%d/%m/%Y %H:%M'),
+        description = data.description or '',
+        status = 'Aberto'
     })
     
-    if result[1] then
-        local row = result[1]
-        local officers = MySQL.Sync.fetchAll([[
-            SELECT e.visa_id, e.name FROM police_occurrence_officers oo
-            JOIN police_employees e ON oo.visa_id = e.visa_id
-            WHERE oo.occurrence_id = @id
-        ]], {
-            ['@id'] = data.occurrenceId
-        })
-        
-        return {
-            id = row.id,
-            title = row.title,
-            date = row.date,
-            requester = row.requester,
-            openedBy = row.opened_by,
-            openedAt = row.opened_at,
-            description = row.description,
-            status = row.status,
-            involvedOfficers = officers
-        }
-    end
-    
-    return nil
-end)
-
-vRP.registerRequest('occurrences:create', function(source, data)
-    if not HasPolicePermission(source, 'occurrences') then
-        return { success = false }
-    end
-    
-    local visaId = GetVisaIdFromSource(source)
-    local identity = GetPlayerIdentity(visaId)
-    local playerName = identity and (identity.name .. ' ' .. identity.firstname) or 'Desconhecido'
-    local date = os.date('%Y-%m-%d')
-    local openedAt = os.date('%d/%m/%Y %H:%M')
-    
-    MySQL.Sync.execute([[
-        INSERT INTO police_occurrences (title, date, requester, opened_by, opened_at, description, status, created_at) 
-        VALUES (@title, @date, @requester, @openedBy, @openedAt, @description, @status, NOW())
-    ]], {
-        ['@title'] = data.title,
-        ['@date'] = date,
-        ['@requester'] = data.requester,
-        ['@openedBy'] = playerName,
-        ['@openedAt'] = openedAt,
-        ['@description'] = data.description or '',
-        ['@status'] = 'Aberto'
-    })
-    
-    local insertId = MySQL.Sync.fetchScalar('SELECT LAST_INSERT_ID()')
-    
-    -- Incrementa contador de boletins do oficial
-    MySQL.Async.execute('UPDATE police_employees SET bulletins_created = bulletins_created + 1 WHERE visa_id = @visaId', {
-        ['@visaId'] = visaId
-    })
-    
-    return { success = true, id = insertId }
-end)
-
-vRP.registerRequest('occurrences:update', function(source, data)
-    if not HasPolicePermission(source, 'occurrences') then
-        return { success = false }
-    end
-    
-    local setClause = {}
-    local params = { ['@id'] = data.occurrenceId }
-    
-    for key, value in pairs(data.data) do
-        table.insert(setClause, key .. ' = @' .. key)
-        params['@' .. key] = value
-    end
-    
-    if #setClause > 0 then
-        local rowsChanged = MySQL.Sync.execute('UPDATE police_occurrences SET ' .. table.concat(setClause, ', ') .. ' WHERE id = @id', params)
-        return { success = rowsChanged > 0 }
-    end
-    
-    return { success = false }
-end)
-
-vRP.registerRequest('occurrences:delete', function(source, data)
-    if not HasPolicePermission(source, 'occurrences') then
-        return { success = false }
-    end
-    
-    local rowsChanged = MySQL.Sync.execute('DELETE FROM police_occurrences WHERE id = @id', {
-        ['@id'] = data.occurrenceId
-    })
-    
-    return { success = rowsChanged > 0 }
-end)
-
-vRP.registerRequest('occurrences:addOfficer', function(source, data)
-    if not HasPolicePermission(source, 'occurrences') then
-        return { success = false }
-    end
-    
-    MySQL.Sync.execute([[
-        INSERT IGNORE INTO police_occurrence_officers (occurrence_id, visa_id) 
-        VALUES (@occurrenceId, @visaId)
-    ]], {
-        ['@occurrenceId'] = data.occurrenceId,
-        ['@visaId'] = data.visaId
-    })
+    vRP.execute("ThnMDT/inc_bulletins", { visaId = user_id })
     
     return { success = true }
-end)
-
-vRP.registerRequest('occurrences:close', function(source, data)
-    if not HasPolicePermission(source, 'occurrences') then
-        return { success = false }
-    end
-    
-    local rowsChanged = MySQL.Sync.execute([[
-        UPDATE police_occurrences 
-        SET status = 'Fechado', resolution = @resolution, closed_at = NOW() 
-        WHERE id = @id
-    ]], {
-        ['@id'] = data.occurrenceId,
-        ['@resolution'] = data.resolution
-    })
-    
-    return { success = rowsChanged > 0 }
-end)
+end
 
 -- ============================================
--- CIDADÃOS (VRPex)
+-- CIDADÃOS
 -- ============================================
 
-vRP.registerRequest('citizens:getAll', function(source, data)
-    local result = MySQL.Sync.fetchAll([[
-        SELECT id, visaid as visa_id, name, firstname, phone 
-        FROM vrp_user_identities 
-        LIMIT 100
-    ]], {})
-    
+function src.searchCitizens(data)
+    local rows = vRP.query("ThnMDT/search_identities", { query = "%" .. data.query .. "%" })
     local citizens = {}
-    for _, row in ipairs(result) do
+    for _, row in ipairs(rows) do
         table.insert(citizens, {
             id = row.id,
             visaId = tostring(row.visa_id),
             name = (row.name or '') .. ' ' .. (row.firstname or ''),
             phone = row.phone or 'N/A',
-            registration = tostring(row.visa_id)
+            registration = tostring(row.registration or row.visa_id)
         })
     end
-    
     return citizens
-end)
+end
 
-vRP.registerRequest('citizens:search', function(source, data)
-    local result = MySQL.Sync.fetchAll([[
-        SELECT id, visaid as visa_id, name, firstname, phone 
-        FROM vrp_user_identities 
-        WHERE name LIKE @query 
-        OR firstname LIKE @query 
-        OR visaid LIKE @query 
-        LIMIT 50
-    ]], {
-        ['@query'] = '%' .. data.query .. '%'
-    })
-    
-    local citizens = {}
-    for _, row in ipairs(result) do
-        table.insert(citizens, {
-            id = row.id,
-            visaId = tostring(row.visa_id),
-            name = (row.name or '') .. ' ' .. (row.firstname or ''),
-            phone = row.phone or 'N/A',
-            registration = tostring(row.visa_id)
-        })
-    end
-    
-    return citizens
-end)
-
-vRP.registerRequest('citizens:getDetails', function(source, data)
-    local result = MySQL.Sync.fetchAll([[
-        SELECT * FROM vrp_user_identities WHERE visaid = @visaId
-    ]], {
-        ['@visaId'] = data.visaId
-    })
-    
-    if result[1] then
-        local row = result[1]
-        local criminalRecord = MySQL.Sync.fetchAll([[
-            SELECT * FROM police_criminal_records WHERE visa_id = @visaId ORDER BY date DESC
-        ]], {
-            ['@visaId'] = data.visaId
-        })
+function src.getCitizenDetails(data)
+    local rows = vRP.query("ThnMDT/get_identity", { visaId = data.visaId })
+    if #rows > 0 then
+        local row = rows[1]
+        local criminal = vRP.query("ThnMDT/get_criminal_records", { visaId = data.visaId })
         
         return {
             id = row.id,
             visaId = tostring(row.visaid),
             name = (row.name or '') .. ' ' .. (row.firstname or ''),
             phone = row.phone or 'N/A',
-            registration = tostring(row.visaid),
-            address = row.address,
-            criminal_record = criminalRecord
+            registration = tostring(row.registration or row.visaid),
+            age = row.age,
+            criminal_record = criminal
         }
     end
-    
     return nil
-end)
+end
 
-vRP.registerRequest('citizens:addCriminalRecord', function(source, data)
-    if not HasPolicePermission(source, 'citizens') then
-        return { success = false }
+function src.applyFine(data)
+    local source = source
+    local user_id = vRP.getUserId(source)
+    if not HasPolicePermission(user_id, 'citizens') then return { success = false } end
+    
+    local target_id = tonumber(data.visaId)
+    if target_id then
+        if vRP.tryFullPayment(target_id, data.value) then
+            -- Sucesso no pagamento (se player online) ou desconta do banco? vRP standard desconta da mão/banco
+            local identity = vRP.getUserIdentity(user_id)
+            local officerName = identity.name .. ' ' .. identity.firstname
+            
+            vRP.execute("ThnMDT/insert_criminal_record", {
+                visaId = data.visaId,
+                article = data.article,
+                date = os.date('%Y-%m-%d %H:%M:%S'),
+                officer = officerName,
+                fine = data.value,
+                jailTime = 0
+            })
+            return { success = true }
+        else
+            return { success = false, message = "Cidadão sem dinheiro." }
+        end
     end
-    
-    local visaId = GetVisaIdFromSource(source)
-    local identity = GetPlayerIdentity(visaId)
-    local officerName = identity and (identity.name .. ' ' .. identity.firstname) or 'Sistema'
-    
-    MySQL.Sync.execute([[
-        INSERT INTO police_criminal_records (visa_id, article, date, officer, fine, jail_time) 
-        VALUES (@visaId, @article, @date, @officer, @fine, @jailTime)
-    ]], {
-        ['@visaId'] = data.visaId,
-        ['@article'] = data.record.article,
-        ['@date'] = os.date('%Y-%m-%d %H:%M:%S'),
-        ['@officer'] = officerName,
-        ['@fine'] = data.record.fine or 0,
-        ['@jailTime'] = data.record.jailTime or 0
-    })
-    
-    local insertId = MySQL.Sync.fetchScalar('SELECT LAST_INSERT_ID()')
-    return { success = true, id = insertId }
-end)
+    return { success = false }
+end
 
-vRP.registerRequest('citizens:getCriminalRecord', function(source, data)
-    local result = MySQL.Sync.fetchAll([[
-        SELECT * FROM police_criminal_records WHERE visa_id = @visaId ORDER BY date DESC
-    ]], {
-        ['@visaId'] = data.visaId
-    })
+function src.applyJail(data)
+    local source = source
+    local user_id = vRP.getUserId(source)
+    if not HasPolicePermission(user_id, 'citizens') then return { success = false } end
     
-    return result
-end)
-
-vRP.registerRequest('citizens:applyFine', function(source, data)
-    if not HasPolicePermission(source, 'citizens') then
-        return { success = false }
-    end
+    local target_id = tonumber(data.visaId)
+    local target_source = vRP.getUserSource(target_id)
     
-    -- Aplica multa via vRP
-    local targetUserId = tonumber(data.visaId)
-    if targetUserId then
-        vRP.tryPayment(targetUserId, data.value)
+    if target_source then
+        vRPclient._teleport(target_source, 1691.55, 2565.93, 45.56) -- Coordenadas da prisão
+        -- Aqui você chamaria o script de prisão do vRPex: vRP.setUData(target_id, "vRP:jail", json.encode(data.time))
         
-        -- Registra na ficha criminal
-        local visaId = GetVisaIdFromSource(source)
-        local identity = GetPlayerIdentity(visaId)
-        local officerName = identity and (identity.name .. ' ' .. identity.firstname) or 'Sistema'
+        local identity = vRP.getUserIdentity(user_id)
+        local officerName = identity.name .. ' ' .. identity.firstname
         
-        MySQL.Async.execute([[
-            INSERT INTO police_criminal_records (visa_id, article, date, officer, fine, jail_time) 
-            VALUES (@visaId, @article, @date, @officer, @fine, 0)
-        ]], {
-            ['@visaId'] = data.visaId,
-            ['@article'] = data.article,
-            ['@date'] = os.date('%Y-%m-%d %H:%M:%S'),
-            ['@officer'] = officerName,
-            ['@fine'] = data.value
+        vRP.execute("ThnMDT/insert_criminal_record", {
+            visaId = data.visaId,
+            article = data.article,
+            date = os.date('%Y-%m-%d %H:%M:%S'),
+            officer = officerName,
+            fine = 0,
+            jailTime = data.time
         })
-        
         return { success = true }
     end
-    
-    return { success = false }
-end)
-
-vRP.registerRequest('citizens:applyJail', function(source, data)
-    if not HasPolicePermission(source, 'citizens') then
-        return { success = false }
-    end
-    
-    -- Prende via vRP/vrpex
-    local targetUserId = tonumber(data.visaId)
-    local targetSource = vRP.getUserSource(targetUserId)
-    
-    if targetSource then
-        -- Teleporta para prisão (adapte as coordenadas)
-        vRPclient.teleport(targetSource, {1691.55, 2565.93, 45.56})
-        
-        -- Registra na ficha criminal
-        local visaId = GetVisaIdFromSource(source)
-        local identity = GetPlayerIdentity(visaId)
-        local officerName = identity and (identity.name .. ' ' .. identity.firstname) or 'Sistema'
-        
-        MySQL.Async.execute([[
-            INSERT INTO police_criminal_records (visa_id, article, date, officer, fine, jail_time) 
-            VALUES (@visaId, @article, @date, @officer, 0, @jailTime)
-        ]], {
-            ['@visaId'] = data.visaId,
-            ['@article'] = data.article,
-            ['@date'] = os.date('%Y-%m-%d %H:%M:%S'),
-            ['@officer'] = officerName,
-            ['@jailTime'] = data.time
-        })
-        
-        return { success = true }
-    end
-    
-    return { success = false }
-end)
+    return { success = false, message = "Cidadão não encontrado na cidade." }
+end
 
 -- ============================================
--- VEÍCULOS (VRPex)
+-- VEÍCULOS
 -- ============================================
 
-vRP.registerRequest('vehicles:getAll', function(source, data)
-    local result = MySQL.Sync.fetchAll([[
-        SELECT v.*, i.name, i.firstname, i.visaid 
-        FROM vrp_user_vehicles v 
-        LEFT JOIN vrp_user_identities i ON v.user_id = i.user_id 
-        LIMIT 100
-    ]], {})
-    
+function src.searchVehicles(data)
+    local rows = vRP.query("ThnMDT/search_vehicles", { plate = "%"..data.plate.."%" })
     local vehicles = {}
-    for _, row in ipairs(result) do
+    for _, row in ipairs(rows) do
         table.insert(vehicles, {
-            id = row.id,
+            id = row.id or 0,
             plate = row.vehicle_plate or 'SEM PLACA',
             model = row.vehicle_name or row.vehicle,
             owner = (row.name or '') .. ' ' .. (row.firstname or ''),
             ownerVisaId = tostring(row.visaid),
-            garage = row.garage or 'Desconhecida',
-            status = row.irregular == 1 and 'Irregular' or 'Regular',
-            irregular = row.irregular == 1,
-            irregularReason = row.irregular_reason
-        })
-    end
-    
-    return vehicles
-end)
-
-vRP.registerRequest('vehicles:search', function(source, data)
-    local result = MySQL.Sync.fetchAll([[
-        SELECT v.*, i.name, i.firstname, i.visaid 
-        FROM vrp_user_vehicles v 
-        LEFT JOIN vrp_user_identities i ON v.user_id = i.user_id 
-        WHERE v.vehicle_plate LIKE @plate
-    ]], {
-        ['@plate'] = '%' .. data.plate .. '%'
-    })
-    
-    local vehicles = {}
-    for _, row in ipairs(result) do
-        table.insert(vehicles, {
-            id = row.id,
-            plate = row.vehicle_plate or 'SEM PLACA',
-            model = row.vehicle_name or row.vehicle,
-            owner = (row.name or '') .. ' ' .. (row.firstname or ''),
-            ownerVisaId = tostring(row.visaid),
-            garage = row.garage or 'Desconhecida',
             status = row.irregular == 1 and 'Irregular' or 'Regular',
             irregular = row.irregular == 1
         })
     end
-    
     return vehicles
-end)
-
-vRP.registerRequest('vehicles:getDetails', function(source, data)
-    local result = MySQL.Sync.fetchAll([[
-        SELECT v.*, i.name, i.firstname, i.visaid 
-        FROM vrp_user_vehicles v 
-        LEFT JOIN vrp_user_identities i ON v.user_id = i.user_id 
-        WHERE v.vehicle_plate = @plate
-    ]], {
-        ['@plate'] = data.plate
-    })
-    
-    if result[1] then
-        local row = result[1]
-        return {
-            id = row.id,
-            plate = row.vehicle_plate,
-            model = row.vehicle_name or row.vehicle,
-            owner = (row.name or '') .. ' ' .. (row.firstname or ''),
-            ownerVisaId = tostring(row.visaid),
-            garage = row.garage or 'Desconhecida',
-            status = row.irregular == 1 and 'Irregular' or 'Regular',
-            irregular = row.irregular == 1,
-            irregularReason = row.irregular_reason
-        }
-    end
-    
-    return nil
-end)
-
-vRP.registerRequest('vehicles:markIrregular', function(source, data)
-    if not HasPolicePermission(source, 'vehicles') then
-        return { success = false }
-    end
-    
-    local rowsChanged = MySQL.Sync.execute([[
-        UPDATE vrp_user_vehicles SET irregular = 1, irregular_reason = @reason 
-        WHERE vehicle_plate = @plate
-    ]], {
-        ['@plate'] = data.plate,
-        ['@reason'] = data.reason
-    })
-    
-    return { success = rowsChanged > 0 }
-end)
-
-vRP.registerRequest('vehicles:clearIrregular', function(source, data)
-    if not HasPolicePermission(source, 'vehicles') then
-        return { success = false }
-    end
-    
-    local rowsChanged = MySQL.Sync.execute([[
-        UPDATE vrp_user_vehicles SET irregular = 0, irregular_reason = NULL 
-        WHERE vehicle_plate = @plate
-    ]], {
-        ['@plate'] = data.plate
-    })
-    
-    return { success = rowsChanged > 0 }
-end)
-
-vRP.registerRequest('vehicles:seize', function(source, data)
-    if not HasPolicePermission(source, 'vehicles') then
-        return { success = false }
-    end
-    
-    local rowsChanged = MySQL.Sync.execute([[
-        UPDATE vrp_user_vehicles SET seized = 1, seized_reason = @reason, seized_date = NOW() 
-        WHERE vehicle_plate = @plate
-    ]], {
-        ['@plate'] = data.plate,
-        ['@reason'] = data.reason
-    })
-    
-    return { success = rowsChanged > 0 }
-end)
-
-vRP.registerRequest('vehicles:release', function(source, data)
-    if not HasPolicePermission(source, 'vehicles') then
-        return { success = false }
-    end
-    
-    local rowsChanged = MySQL.Sync.execute([[
-        UPDATE vrp_user_vehicles SET seized = 0, seized_reason = NULL, seized_date = NULL 
-        WHERE vehicle_plate = @plate
-    ]], {
-        ['@plate'] = data.plate
-    })
-    
-    return { success = rowsChanged > 0 }
-end)
+end
 
 -- ============================================
--- RECRUTAMENTO (VRPex)
+-- RÁDIO
 -- ============================================
 
-vRP.registerRequest('recruitment:getAll', function(source, data)
-    local result = MySQL.Sync.fetchAll('SELECT * FROM police_recruitment ORDER BY created_at DESC', {})
+function src.radioBroadcast(data)
+    local source = source
+    local user_id = vRP.getUserId(source)
+    local identity = vRP.getUserIdentity(user_id)
+    local name = identity.name .. ' ' .. identity.firstname
     
-    local recruitments = {}
-    for _, row in ipairs(result) do
-        table.insert(recruitments, {
-            id = row.id,
-            visaId = tostring(row.visa_id),
-            name = row.name,
-            grade = row.grade or 0,
-            status = row.status,
-            updatedBy = row.updated_by,
-            updatedAt = row.updated_at,
-            notes = row.notes
-        })
+    local officers = vRP.query("ThnMDT/get_onduty_officers", {})
+    for _, off in ipairs(officers) do
+        local tSource = vRP.getUserSource(tonumber(off.visa_id))
+        if tSource then
+            TriggerClientEvent("Notify", tSource, "azul", "[RÁDIO] " .. name .. ": " .. data.message)
+        end
     end
-    
-    return recruitments
-end)
-
-vRP.registerRequest('recruitment:add', function(source, data)
-    if not HasPolicePermission(source, 'recruitment') then
-        return { success = false }
-    end
-    
-    local adminVisaId = GetVisaIdFromSource(source)
-    local adminIdentity = GetPlayerIdentity(adminVisaId)
-    local adminName = adminIdentity and (adminIdentity.name .. ' ' .. adminIdentity.firstname) or 'Sistema'
-    
-    MySQL.Sync.execute([[
-        INSERT INTO police_recruitment (visa_id, name, grade, status, updated_by, updated_at, notes, created_at) 
-        VALUES (@visaId, @name, 0, 'Pendente', @updatedBy, @updatedAt, @notes, NOW())
-    ]], {
-        ['@visaId'] = data.visaId,
-        ['@name'] = data.name,
-        ['@updatedBy'] = adminName,
-        ['@updatedAt'] = os.date('%d/%m/%Y'),
-        ['@notes'] = data.notes or ''
-    })
-    
-    local insertId = MySQL.Sync.fetchScalar('SELECT LAST_INSERT_ID()')
-    return { success = true, id = insertId }
-end)
-
-vRP.registerRequest('recruitment:updateStatus', function(source, data)
-    if not HasPolicePermission(source, 'recruitment') then
-        return { success = false }
-    end
-    
-    local adminVisaId = GetVisaIdFromSource(source)
-    local adminIdentity = GetPlayerIdentity(adminVisaId)
-    local adminName = adminIdentity and (adminIdentity.name .. ' ' .. adminIdentity.firstname) or 'Sistema'
-    
-    local params = {
-        ['@id'] = data.recruitmentId,
-        ['@status'] = data.status,
-        ['@updatedBy'] = adminName,
-        ['@updatedAt'] = os.date('%d/%m/%Y')
-    }
-    
-    local query = 'UPDATE police_recruitment SET status = @status, updated_by = @updatedBy, updated_at = @updatedAt'
-    
-    if data.grade then
-        query = query .. ', grade = @grade'
-        params['@grade'] = data.grade
-    end
-    
-    query = query .. ' WHERE id = @id'
-    
-    local rowsChanged = MySQL.Sync.execute(query, params)
-    return { success = rowsChanged > 0 }
-end)
-
-vRP.registerRequest('recruitment:approve', function(source, data)
-    if not HasPolicePermission(source, 'recruitment') then
-        return { success = false }
-    end
-    
-    -- Busca dados do candidato
-    local recruitment = MySQL.Sync.fetchAll('SELECT * FROM police_recruitment WHERE id = @id', {
-        ['@id'] = data.recruitmentId
-    })
-    
-    if recruitment[1] then
-        local candidate = recruitment[1]
-        
-        -- Adiciona como funcionário (Soldado)
-        MySQL.Sync.execute([[
-            INSERT INTO police_employees (visa_id, name, rank_id, is_on_duty, bulletins_created, is_recruiter) 
-            VALUES (@visaId, @name, @rankId, 0, 0, 0)
-        ]], {
-            ['@visaId'] = candidate.visa_id,
-            ['@name'] = candidate.name,
-            ['@rankId'] = #Config.Ranks -- Última patente (Soldado)
-        })
-        
-        -- Adiciona grupo no vRP
-        vRP.addUserGroup(tonumber(candidate.visa_id), 'Soldado')
-        
-        -- Atualiza status do recrutamento
-        local adminVisaId = GetVisaIdFromSource(source)
-        local adminIdentity = GetPlayerIdentity(adminVisaId)
-        local adminName = adminIdentity and (adminIdentity.name .. ' ' .. adminIdentity.firstname) or 'Sistema'
-        
-        MySQL.Sync.execute([[
-            UPDATE police_recruitment 
-            SET status = 'Aprovado', updated_by = @updatedBy, updated_at = @updatedAt 
-            WHERE id = @id
-        ]], {
-            ['@id'] = data.recruitmentId,
-            ['@updatedBy'] = adminName,
-            ['@updatedAt'] = os.date('%d/%m/%Y')
-        })
-        
-        return { success = true }
-    end
-    
-    return { success = false }
-end)
-
-vRP.registerRequest('recruitment:reject', function(source, data)
-    if not HasPolicePermission(source, 'recruitment') then
-        return { success = false }
-    end
-    
-    local adminVisaId = GetVisaIdFromSource(source)
-    local adminIdentity = GetPlayerIdentity(adminVisaId)
-    local adminName = adminIdentity and (adminIdentity.name .. ' ' .. adminIdentity.firstname) or 'Sistema'
-    
-    local rowsChanged = MySQL.Sync.execute([[
-        UPDATE police_recruitment 
-        SET status = 'Reprovado', updated_by = @updatedBy, updated_at = @updatedAt, rejection_reason = @reason 
-        WHERE id = @id
-    ]], {
-        ['@id'] = data.recruitmentId,
-        ['@updatedBy'] = adminName,
-        ['@updatedAt'] = os.date('%d/%m/%Y'),
-        ['@reason'] = data.reason or 'Não especificado'
-    })
-    
-    return { success = rowsChanged > 0 }
-end)
-
-vRP.registerRequest('recruitment:delete', function(source, data)
-    if not HasPolicePermission(source, 'recruitment') then
-        return { success = false }
-    end
-    
-    local rowsChanged = MySQL.Sync.execute('DELETE FROM police_recruitment WHERE id = @id', {
-        ['@id'] = data.recruitmentId
-    })
-    
-    return { success = rowsChanged > 0 }
-end)
-
--- ============================================
--- CÓDIGO PENAL (VRPex)
--- ============================================
-
-vRP.registerRequest('penalCode:getAll', function(source, data)
-    local result = MySQL.Sync.fetchAll('SELECT * FROM police_penal_code ORDER BY category, article', {})
-    
-    local codes = {}
-    for _, row in ipairs(result) do
-        table.insert(codes, {
-            id = row.id,
-            article = row.article,
-            title = row.title,
-            description = row.description,
-            penalty = row.penalty,
-            fine = row.fine or 0,
-            jailTime = row.jail_time or 0,
-            category = row.category
-        })
-    end
-    
-    return codes
-end)
-
-vRP.registerRequest('penalCode:getArticle', function(source, data)
-    local result = MySQL.Sync.fetchAll('SELECT * FROM police_penal_code WHERE article = @article', {
-        ['@article'] = data.article
-    })
-    
-    if result[1] then
-        local row = result[1]
-        return {
-            id = row.id,
-            article = row.article,
-            title = row.title,
-            description = row.description,
-            penalty = row.penalty,
-            fine = row.fine or 0,
-            jailTime = row.jail_time or 0,
-            category = row.category
-        }
-    end
-    
-    return nil
-end)
-
-vRP.registerRequest('penalCode:add', function(source, data)
-    if not HasPolicePermission(source, 'penal-code') then
-        return { success = false }
-    end
-    
-    MySQL.Sync.execute([[
-        INSERT INTO police_penal_code (article, title, description, penalty, fine, jail_time, category) 
-        VALUES (@article, @title, @description, @penalty, @fine, @jailTime, @category)
-    ]], {
-        ['@article'] = data.article,
-        ['@title'] = data.title,
-        ['@description'] = data.description,
-        ['@penalty'] = data.penalty,
-        ['@fine'] = data.fine or 0,
-        ['@jailTime'] = data.jailTime or 0,
-        ['@category'] = data.category
-    })
-    
-    local insertId = MySQL.Sync.fetchScalar('SELECT LAST_INSERT_ID()')
-    return { success = true, id = insertId }
-end)
-
-vRP.registerRequest('penalCode:update', function(source, data)
-    if not HasPolicePermission(source, 'penal-code') then
-        return { success = false }
-    end
-    
-    local setClause = {}
-    local params = { ['@id'] = data.codeId }
-    
-    for key, value in pairs(data.data) do
-        local dbKey = key
-        if key == 'jailTime' then dbKey = 'jail_time' end
-        table.insert(setClause, dbKey .. ' = @' .. key)
-        params['@' .. key] = value
-    end
-    
-    if #setClause > 0 then
-        local rowsChanged = MySQL.Sync.execute('UPDATE police_penal_code SET ' .. table.concat(setClause, ', ') .. ' WHERE id = @id', params)
-        return { success = rowsChanged > 0 }
-    end
-    
-    return { success = false }
-end)
-
-vRP.registerRequest('penalCode:delete', function(source, data)
-    if not HasPolicePermission(source, 'penal-code') then
-        return { success = false }
-    end
-    
-    local rowsChanged = MySQL.Sync.execute('DELETE FROM police_penal_code WHERE id = @id', {
-        ['@id'] = data.codeId
-    })
-    
-    return { success = rowsChanged > 0 }
-end)
-
--- ============================================
--- AVISOS/ALERTAS (VRPex)
--- ============================================
-
-vRP.registerRequest('alerts:get', function(source, data)
-    local result = MySQL.Sync.fetchAll('SELECT * FROM police_alerts ORDER BY id DESC LIMIT 1', {})
-    
-    if result[1] then
-        return {
-            content = result[1].content,
-            lastUpdate = result[1].last_update,
-            updatedBy = result[1].updated_by
-        }
-    end
-    
-    return {
-        content = '',
-        lastUpdate = '',
-        updatedBy = ''
-    }
-end)
-
-vRP.registerRequest('alerts:update', function(source, data)
-    if not HasPolicePermission(source, 'alerts') then
-        return { success = false }
-    end
-    
-    local visaId = GetVisaIdFromSource(source)
-    local identity = GetPlayerIdentity(visaId)
-    local playerName = identity and (identity.name .. ' ' .. identity.firstname) or 'Sistema'
-    
-    -- Verifica se já existe
-    local existing = MySQL.Sync.fetchScalar('SELECT COUNT(*) FROM police_alerts')
-    
-    if existing > 0 then
-        MySQL.Sync.execute([[
-            UPDATE police_alerts SET content = @content, last_update = @lastUpdate, updated_by = @updatedBy 
-            ORDER BY id DESC LIMIT 1
-        ]], {
-            ['@content'] = data.content,
-            ['@lastUpdate'] = os.date('%d/%m/%Y %H:%M'),
-            ['@updatedBy'] = playerName
-        })
-    else
-        MySQL.Sync.execute([[
-            INSERT INTO police_alerts (content, last_update, updated_by) 
-            VALUES (@content, @lastUpdate, @updatedBy)
-        ]], {
-            ['@content'] = data.content,
-            ['@lastUpdate'] = os.date('%d/%m/%Y %H:%M'),
-            ['@updatedBy'] = playerName
-        })
-    end
-    
     return { success = true }
-end)
+end
 
--- ============================================
--- MISSÕES (VRPex)
--- ============================================
-
-vRP.registerRequest('missions:getAll', function(source, data)
-    local result = MySQL.Sync.fetchAll('SELECT * FROM police_missions ORDER BY created_at DESC', {})
-    
-    local missions = {}
-    for _, row in ipairs(result) do
-        local assignedTo = MySQL.Sync.fetchAll([[
-            SELECT visa_id FROM police_mission_officers WHERE mission_id = @id
-        ]], { ['@id'] = row.id })
-        
-        local visaIds = {}
-        for _, a in ipairs(assignedTo) do
-            table.insert(visaIds, a.visa_id)
-        end
-        
-        table.insert(missions, {
-            id = row.id,
-            title = row.title,
-            description = row.description,
-            status = row.status,
-            assignedTo = visaIds,
-            createdBy = row.created_by,
-            createdAt = row.created_at,
-            completedAt = row.completed_at,
-            priority = row.priority or 'medium'
-        })
-    end
-    
-    return missions
-end)
-
-vRP.registerRequest('missions:create', function(source, data)
-    if not HasPolicePermission(source, 'missions') then
-        return { success = false }
-    end
-    
-    local visaId = GetVisaIdFromSource(source)
-    
-    MySQL.Sync.execute([[
-        INSERT INTO police_missions (title, description, status, created_by, created_at, priority) 
-        VALUES (@title, @description, @status, @createdBy, NOW(), @priority)
-    ]], {
-        ['@title'] = data.title,
-        ['@description'] = data.description,
-        ['@status'] = data.status or 'pending',
-        ['@createdBy'] = visaId,
-        ['@priority'] = data.priority or 'medium'
-    })
-    
-    local insertId = MySQL.Sync.fetchScalar('SELECT LAST_INSERT_ID()')
-    
-    -- Adiciona oficiais atribuídos
-    if data.assignedTo then
-        for _, visaId in ipairs(data.assignedTo) do
-            MySQL.Async.execute([[
-                INSERT INTO police_mission_officers (mission_id, visa_id) VALUES (@missionId, @visaId)
-            ]], {
-                ['@missionId'] = insertId,
-                ['@visaId'] = visaId
-            })
-        end
-    end
-    
-    return { success = true, id = insertId }
-end)
-
-vRP.registerRequest('missions:updateStatus', function(source, data)
-    if not HasPolicePermission(source, 'missions') then
-        return { success = false }
-    end
-    
-    local query = 'UPDATE police_missions SET status = @status'
-    local params = { ['@id'] = data.missionId, ['@status'] = data.status }
-    
-    if data.status == 'completed' then
-        query = query .. ', completed_at = NOW()'
-    end
-    
-    query = query .. ' WHERE id = @id'
-    
-    local rowsChanged = MySQL.Sync.execute(query, params)
-    return { success = rowsChanged > 0 }
-end)
-
-vRP.registerRequest('missions:assign', function(source, data)
-    if not HasPolicePermission(source, 'missions') then
-        return { success = false }
-    end
-    
-    for _, visaId in ipairs(data.visaIds) do
-        MySQL.Async.execute([[
-            INSERT IGNORE INTO police_mission_officers (mission_id, visa_id) VALUES (@missionId, @visaId)
-        ]], {
-            ['@missionId'] = data.missionId,
-            ['@visaId'] = visaId
-        })
-    end
-    
-    return { success = true }
-end)
-
-vRP.registerRequest('missions:unassign', function(source, data)
-    if not HasPolicePermission(source, 'missions') then
-        return { success = false }
-    end
-    
-    MySQL.Sync.execute([[
-        DELETE FROM police_mission_officers WHERE mission_id = @missionId AND visa_id = @visaId
-    ]], {
-        ['@missionId'] = data.missionId,
-        ['@visaId'] = data.visaId
-    })
-    
-    return { success = true }
-end)
-
-vRP.registerRequest('missions:delete', function(source, data)
-    if not HasPolicePermission(source, 'missions') then
-        return { success = false }
-    end
-    
-    MySQL.Sync.execute('DELETE FROM police_mission_officers WHERE mission_id = @id', { ['@id'] = data.missionId })
-    local rowsChanged = MySQL.Sync.execute('DELETE FROM police_missions WHERE id = @id', { ['@id'] = data.missionId })
-    
-    return { success = rowsChanged > 0 }
-end)
-
--- ============================================
--- RÁDIO/COMUNICAÇÃO (VRPex)
--- ============================================
-
-vRP.registerRequest('radio:broadcast', function(source, data)
-    local visaId = GetVisaIdFromSource(source)
-    local identity = GetPlayerIdentity(visaId)
-    local playerName = identity and (identity.name .. ' ' .. identity.firstname) or 'Desconhecido'
-    
-    -- Envia para todos policiais em serviço
-    local onDuty = MySQL.Sync.fetchAll('SELECT visa_id FROM police_employees WHERE is_on_duty = 1', {})
-    
-    for _, officer in ipairs(onDuty) do
-        local targetSource = vRP.getUserSource(officer.visa_id)
-        if targetSource then
-            vRPclient.notify(targetSource, {'~b~[RÁDIO] ' .. playerName .. ': ~w~' .. data.message})
-        end
-    end
-    
-    return { success = true }
-end)
-
-vRP.registerRequest('radio:emergency', function(source, data)
-    local visaId = GetVisaIdFromSource(source)
-    local identity = GetPlayerIdentity(visaId)
-    local playerName = identity and (identity.name .. ' ' .. identity.firstname) or 'Desconhecido'
-    
-    -- Envia alerta para todos policiais
-    local allOfficers = MySQL.Sync.fetchAll('SELECT visa_id FROM police_employees', {})
-    
-    for _, officer in ipairs(allOfficers) do
-        local targetSource = vRP.getUserSource(officer.visa_id)
-        if targetSource then
-            vRPclient.notify(targetSource, {'~r~[EMERGÊNCIA] ' .. data.type .. '~w~\nLocal: ' .. data.location .. '\n' .. data.details})
-        end
-    end
-    
-    return { success = true }
-end)
-
-vRP.registerRequest('radio:backup', function(source, data)
-    local visaId = GetVisaIdFromSource(source)
-    local identity = GetPlayerIdentity(visaId)
-    local playerName = identity and (identity.name .. ' ' .. identity.firstname) or 'Desconhecido'
-    
-    local priorityColors = {
-        low = '~g~',
-        medium = '~o~',
-        high = '~r~'
-    }
-    
-    local color = priorityColors[data.priority] or '~o~'
-    
-    -- Envia para todos policiais em serviço
-    local onDuty = MySQL.Sync.fetchAll('SELECT visa_id FROM police_employees WHERE is_on_duty = 1', {})
-    
-    for _, officer in ipairs(onDuty) do
-        local targetSource = vRP.getUserSource(officer.visa_id)
-        if targetSource then
-            vRPclient.notify(targetSource, {color .. '[REFORÇO SOLICITADO]~w~\nOficial: ' .. playerName .. '\nLocal: ' .. data.location})
-        end
-    end
-    
-    return { success = true }
-end)
-
--- ============================================
--- LOGS (VRPex)
--- ============================================
-
-vRP.registerRequest('logs:getAll', function(source, data)
-    if not HasPolicePermission(source, 'positions') then
-        return {}
-    end
-    
-    local query = 'SELECT * FROM police_logs WHERE 1=1'
-    local params = {}
-    
-    if data.filter then
-        if data.filter.action then
-            query = query .. ' AND action = @action'
-            params['@action'] = data.filter.action
-        end
-        if data.filter.visaId then
-            query = query .. ' AND (admin_visa_id = @visaId OR target_visa_id = @visaId)'
-            params['@visaId'] = data.filter.visaId
-        end
-        if data.filter.startDate then
-            query = query .. ' AND date >= @startDate'
-            params['@startDate'] = data.filter.startDate
-        end
-        if data.filter.endDate then
-            query = query .. ' AND date <= @endDate'
-            params['@endDate'] = data.filter.endDate
-        end
-    end
-    
-    query = query .. ' ORDER BY date DESC LIMIT 100'
-    
-    local result = MySQL.Sync.fetchAll(query, params)
-    
-    local logs = {}
-    for _, row in ipairs(result) do
-        table.insert(logs, {
-            id = row.id,
-            action = row.action,
-            visaId = tostring(row.admin_visa_id),
-            details = row.reason,
-            date = row.date
-        })
-    end
-    
-    return logs
-end)
+-- (Adicione as demais funções do server.lua original seguindo este padrão src.nomeFuncao)
